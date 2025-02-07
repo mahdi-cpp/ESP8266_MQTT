@@ -3,6 +3,7 @@
 #include <Wire.h>
 #include <ESP8266WebServer.h>
 #include <EEPROM.h>
+#include <ArduinoJson.h>
 
 ESP8266WebServer server(80);
 
@@ -35,6 +36,8 @@ WiFiClient espClient;
 PubSubClient mqtt_client(espClient);
 
 unsigned long lastMsg = 0;
+unsigned long errorLastMsg = 0;
+
 #define MSG_BUFFER_SIZE (50)
 char msg[MSG_BUFFER_SIZE];
 int value = 0;
@@ -51,6 +54,38 @@ const int16_t I2C_SLAVE_2 = 0x09;
 const int ledWifiConnection = 12;  // LED for status of wifi conections
 const int ledMqttConnection = 14;  // LED for status of MQTT conections
 
+
+String macAddress;
+
+struct Packet {
+  String id;
+  String message;
+  String temperature;
+  uint value1;
+};
+
+// Function to convert Packet struct to char*
+char *packetToCharArray(const Packet &packet) {
+  // Create a JSON document
+  StaticJsonDocument<100> jsonDoc;  // Adjust size based on expected output
+
+  // Fill the JSON document
+  jsonDoc["id"] = packet.id;
+  jsonDoc["message"] = packet.message;
+  jsonDoc["temperature"] = packet.temperature;
+  jsonDoc["value1"] = packet.value1;
+
+  // Serialize the JSON document to a String
+  String jsonString;
+  serializeJson(jsonDoc, jsonString);
+
+  // Allocate memory for the char array
+  char *result = new char[jsonString.length() + 1];  // +1 for null terminator
+  strcpy(result, jsonString.c_str());                // Copy the String to char*
+
+  return result;  // Return the dynamically allocated char*
+}
+
 void setup() {
 
   Serial.begin(115200);
@@ -61,12 +96,14 @@ void setup() {
 
   delay(10);
 
+  macAddress = WiFi.macAddress();
+
   Serial.println("");
 
   EEPROM.begin(512);  // Initialize EEPROM with 512 bytes
                       // Write zeros to all bytes in the EEPROM
   for (int i = 0; i < 512; i++) {
-    EEPROM.write(i, 0);  // Write 0 to each byte
+    //EEPROM.write(i, 0);  // Write 0 to each byte
   }
 
   // Commit the changes to EEPROM
@@ -146,13 +183,27 @@ void loop() {
 
       long now = millis();
       if (now - lastMsg > 2000) {
-        lastMsg = now;
-        ++value;
-        snprintf(msg, MSG_BUFFER_SIZE, "temperature #%ld", value);
-        Serial.print("Publish message: ");
-        Serial.println(msg);
 
-        mqtt_client.publish(mqtt_topic, msg);
+        lastMsg = now;
+
+        // Create and populate a Packet struct
+        Packet myPacket;
+        myPacket.id = macAddress;
+        myPacket.message = "Sensor activated";
+        myPacket.temperature = "18.5°C";
+        myPacket.value1 = 100 + value++;
+
+        // Convert the Packet struct to char*
+        char *jsonOutput = packetToCharArray(myPacket);
+
+        Serial.print("Publish message: ");
+        mqtt_client.publish(mqtt_topic, jsonOutput);
+      }
+
+
+      if (now - errorLastMsg > 5000) {
+        errorLastMsg = now;
+        mqtt_client.publish("error", "error 5");
       }
     }
   }
@@ -167,6 +218,7 @@ boolean reconnect() {
 
     if (mqtt_client.connect("esp8266Client", mqtt_username, mqtt_password)) {
       mqtt_client.publish("outTopic", "hello world");
+
       mqtt_client.subscribe("inTopic");
     }
   }
@@ -175,6 +227,7 @@ boolean reconnect() {
 }
 
 void mqttCallback(char *topic, byte *payload, unsigned int length) {
+
   Serial.print("Message received on topic: ");
   Serial.println(topic);
   Serial.print("Message:");
@@ -364,4 +417,3 @@ bool isValidIP(const String &ip) {
   // Valid if there are exactly 3 dots
   return (dots == 3);
 }
-
